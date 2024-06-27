@@ -49,12 +49,13 @@ def record():
         )
 
 
-def qaoa_block_vag(gdata, nnp, preset):
-    nnp = nnp.numpy()  # real
+def qaoa_block_vag(gdata, nnp, preset, repeat):
+    nnp = nnp.numpy()
     pnnp = []
-    ops = ['H', 'rx_zz', 'zz_ry', 'zz_rx', 'zz_rz', 'xx_rz', 'yy_rx', 'rx_rz']
+    ops = ['rx_zz', 'zz_ry', 'zz_rx', 'zz_rz', 'xx_rz', 'yy_rx', 'rx_rz']
     chosen_ops = []
-    for i, j in enumerate(preset):
+    repeated_preset = preset * repeat
+    for i, j in enumerate(repeated_preset):
         if '_' in ops[j]:
             pnnp.append([nnp[2 * i, j], nnp[2 * i + 1, j]])
             chosen_ops.append(ops[j][0:2])
@@ -65,7 +66,7 @@ def qaoa_block_vag(gdata, nnp, preset):
     edges = []
     for e in gdata.edges:
         edges.append(e)
-    design = dqas_translator(chosen_ops, edges,'full')
+    design = dqas_translator(chosen_ops, edges, repeat,'full')
     # pnnp = array_to_tensor(np.array(pnnp))  # complex
     # pnnp = tf.ragged.constant(pnnp, dtype=getattr(tf, cons.dtypestr))
     design['pnnp'] = tf.ragged.constant(pnnp, dtype=dtype)
@@ -80,10 +81,10 @@ def qaoa_block_vag(gdata, nnp, preset):
     gmatrix = np.zeros_like(nnp)
     for j in range(gr.shape[0]):
         if gr[j].shape[0] == 2:
-            gmatrix[2 * j, preset[j]] = gr[j][0]
-            gmatrix[2 * j + 1, preset[j]] = gr[j][1]
+            gmatrix[2 * j, repeated_preset[j]] = gr[j][0]
+            gmatrix[2 * j + 1, repeated_preset[j]] = gr[j][1]
         else:  # 1
-            gmatrix[2 * j, preset[j]] = gr[j][0]
+            gmatrix[2 * j, repeated_preset[j]] = gr[j][0]
 
     gmatrix = tf.constant(gmatrix)
     return val_loss, gmatrix
@@ -92,17 +93,19 @@ def qaoa_block_vag(gdata, nnp, preset):
 if __name__ == '__main__':
 
     p = 4
-    c = 8
+    c = 7
+    repeat = 10
 
-    op_pool = ['H', 'rx_zz', 'zz_ry', 'zz_rx', 'zz_rz', 'xx_rz', 'yy_rx', 'rx_rz']
+    op_pool = ['rx_zz', 'zz_ry', 'zz_rx', 'zz_rz', 'xx_rz', 'yy_rx', 'rx_rz']
     g = regular_graph_generator(n=4, d=2)
     result = namedtuple("result", ["epoch", "cand", "loss"])
 
     verbose = None
     dtype = tf.float32
     batch = 8
-    noise = np.random.normal(loc=0.0, scale=0.2, size=[2 * p, c])
+    noise = np.random.normal(loc=0.0, scale=0.2, size=[repeat * 2 * p, c])
     noise = tf.constant(noise, dtype=tf.float32)
+    noise = None
     network_opt = tf.keras.optimizers.Adam(learning_rate=0.1)  # network
     structure_opt = tf.keras.optimizers.Adam(
         learning_rate=0.1, beta_1=0.8, beta_2=0.99
@@ -110,7 +113,7 @@ if __name__ == '__main__':
     stp_regularization = None
     nnp_regularization = None
 
-    nnp_initial_value = np.random.normal(loc=0.23, scale=0.06, size=[2 * p, c])
+    nnp_initial_value = np.random.normal(loc=0.23, scale=0.06, size=[repeat * 2 * p, c])
     stp_initial_value = np.zeros([p, c])
     nnp = tf.Variable(initial_value=nnp_initial_value, dtype=dtype)
     stp = tf.Variable(initial_value=stp_initial_value, dtype=dtype)
@@ -144,9 +147,9 @@ if __name__ == '__main__':
         for _, gdata in zip(range(batch), g):
             preset = preset_byprob(prob)
             if noise is not None:
-                loss, gnnp = qaoa_block_vag(gdata, nnp + noise, preset)
+                loss, gnnp = qaoa_block_vag(gdata, nnp + noise, preset, repeat)
             else:
-                loss, gnnp = qaoa_block_vag(gdata, nnp, preset)
+                loss, gnnp = qaoa_block_vag(gdata, nnp, preset, repeat)
 
             gs = tf.tensor_scatter_nd_add(
                 tf.cast(-prob, dtype=dtype),
