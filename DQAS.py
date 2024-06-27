@@ -45,7 +45,7 @@ def get_var(name):
 
 def record():
     return result(
-        get_var("epoch"), get_var("cand_preset_repr"), get_var("avcost1").numpy()
+        get_var("epoch"), get_var("cand_preset_repr"), get_var("avcost1").numpy(), get_var("avtestacc").numpy()
         )
 
 
@@ -73,7 +73,7 @@ def qaoa_block_vag(gdata, nnp, preset, repeat):
     design['preset'] = preset
     design['edges'] = edges
 
-    val_loss, model_grads = dqas_Scheme(design, 'MNIST', 'init', 1)
+    val_loss, model_grads, test_acc = dqas_Scheme(design, 'MNIST', 'init', 1)
     val_loss = tf.constant(val_loss, dtype=dtype)
     gr = tf.constant(model_grads, dtype=dtype)
     gr = design['pnnp'].with_values(gr)
@@ -87,7 +87,7 @@ def qaoa_block_vag(gdata, nnp, preset, repeat):
             gmatrix[2 * j, repeated_preset[j]] = gr[j][0]
 
     gmatrix = tf.constant(gmatrix)
-    return val_loss, gmatrix
+    return val_loss, gmatrix, test_acc
 
 
 if __name__ == '__main__':
@@ -98,7 +98,7 @@ if __name__ == '__main__':
 
     op_pool = ['rx_zz', 'zz_ry', 'zz_rx', 'zz_rz', 'xx_rz', 'yy_rx', 'rx_rz']
     g = regular_graph_generator(n=4, d=2)
-    result = namedtuple("result", ["epoch", "cand", "loss"])
+    result = namedtuple("result", ["epoch", "cand", "loss", "test_acc"])
 
     verbose = None
     dtype = tf.float32
@@ -131,6 +131,8 @@ if __name__ == '__main__':
         deri_nnp = []
         avcost2 = avcost1
         costl = []
+        test_acc_list = []
+
         if stp_regularization is not None:
             stp_penalty_gradient = stp_regularization(stp, nnp)
             if verbose:
@@ -147,9 +149,9 @@ if __name__ == '__main__':
         for _, gdata in zip(range(batch), g):
             preset = preset_byprob(prob)
             if noise is not None:
-                loss, gnnp = qaoa_block_vag(gdata, nnp + noise, preset, repeat)
+                loss, gnnp, test_acc = qaoa_block_vag(gdata, nnp + noise, preset, repeat)
             else:
-                loss, gnnp = qaoa_block_vag(gdata, nnp, preset, repeat)
+                loss, gnnp, test_acc = qaoa_block_vag(gdata, nnp, preset, repeat)
 
             gs = tf.tensor_scatter_nd_add(
                 tf.cast(-prob, dtype=dtype),
@@ -162,8 +164,10 @@ if __name__ == '__main__':
             )
             deri_nnp.append(gnnp)
             costl.append(loss.numpy())
+            test_acc_list.append(test_acc)
 
         avcost1 = tf.convert_to_tensor(np.mean(costl))
+        avtestacc = tf.convert_to_tensor(np.mean(test_acc_list))
 
         print(
             "batched average loss: ",
@@ -209,12 +213,18 @@ if __name__ == '__main__':
 
         epochs = np.arange(len(history))
         data = np.array([r.loss for r in history])
+        plt.figure()
         plt.plot(epochs, data)
         plt.xlabel("epoch")
-        plt.ylabel("objective")
-        plt.savefig("qaoa_block.pdf")
+        plt.ylabel("objective (loss)")
+        plt.savefig("loss_plot.pdf")
 
-
+        test_acc_data = np.array([r.test_acc for r in history])
+        plt.figure()
+        plt.plot(epochs, test_acc_data)
+        plt.xlabel("epoch")
+        plt.ylabel("test acc")
+        plt.savefig("test_acc_plot.pdf")
 
 
 
