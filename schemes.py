@@ -204,7 +204,7 @@ def dqas_Scheme(design, task, weight='base', epochs=None, verbs=None, save=None)
 
     if save:
         torch.save(best_model.state_dict(), 'weights/init_weight')
-    return train_loss[0], model_grads
+    return val_loss[0], model_grads
 
 
 if __name__ == '__main__':
