@@ -37,7 +37,6 @@ def repr_op(element):
 def get_var(name):
     """
     call in customized functions and grab variable within DQAF framework function by var name str
-
     :param name:
     :return:
     """
@@ -45,17 +44,16 @@ def get_var(name):
 
 def record():
     return result(
-        get_var("epoch"), get_var("cand_preset_repr"), get_var("avcost1").numpy(), get_var("avtestacc").numpy()
+        get_var("epoch"), get_var("cand_preset_repr"), get_var("avcost1").numpy()
         )
 
 
-def qaoa_block_vag(gdata, nnp, preset, repeat):
-    nnp = nnp.numpy()
+def qaoa_block_vag(gdata, nnp, preset):
+    nnp = nnp.numpy()  # real
     pnnp = []
-    ops = ['rx_zz', 'zz_ry', 'zz_rx', 'zz_rz', 'xx_rz', 'yy_rx', 'rx_rz']
+    ops = ['H', 'rx_zz', 'zz_ry', 'zz_rx', 'zz_rz', 'xx_rz', 'yy_rx', 'rx_rz']
     chosen_ops = []
-    repeated_preset = preset * repeat
-    for i, j in enumerate(repeated_preset):
+    for i, j in enumerate(preset):
         if '_' in ops[j]:
             pnnp.append([nnp[2 * i, j], nnp[2 * i + 1, j]])
             chosen_ops.append(ops[j][0:2])
@@ -66,14 +64,14 @@ def qaoa_block_vag(gdata, nnp, preset, repeat):
     edges = []
     for e in gdata.edges:
         edges.append(e)
-    design = dqas_translator(chosen_ops, edges, repeat,'full')
+    design = dqas_translator(chosen_ops, edges,'full')
     # pnnp = array_to_tensor(np.array(pnnp))  # complex
     # pnnp = tf.ragged.constant(pnnp, dtype=getattr(tf, cons.dtypestr))
     design['pnnp'] = tf.ragged.constant(pnnp, dtype=dtype)
     design['preset'] = preset
     design['edges'] = edges
 
-    val_loss, model_grads, test_acc = dqas_Scheme(design, 'MNIST', 'init', 1)
+    val_loss, model_grads = dqas_Scheme(design, 'MNIST', 'init', 1)
     val_loss = tf.constant(val_loss, dtype=dtype)
     gr = tf.constant(model_grads, dtype=dtype)
     gr = design['pnnp'].with_values(gr)
@@ -81,31 +79,29 @@ def qaoa_block_vag(gdata, nnp, preset, repeat):
     gmatrix = np.zeros_like(nnp)
     for j in range(gr.shape[0]):
         if gr[j].shape[0] == 2:
-            gmatrix[2 * j, repeated_preset[j]] = gr[j][0]
-            gmatrix[2 * j + 1, repeated_preset[j]] = gr[j][1]
+            gmatrix[2 * j, preset[j]] = gr[j][0]
+            gmatrix[2 * j + 1, preset[j]] = gr[j][1]
         else:  # 1
-            gmatrix[2 * j, repeated_preset[j]] = gr[j][0]
+            gmatrix[2 * j, preset[j]] = gr[j][0]
 
     gmatrix = tf.constant(gmatrix)
-    return val_loss, gmatrix, test_acc
+    return val_loss, gmatrix
 
 
 if __name__ == '__main__':
 
     p = 4
-    c = 7
-    repeat = 10
+    c = 8
 
-    op_pool = ['rx_zz', 'zz_ry', 'zz_rx', 'zz_rz', 'xx_rz', 'yy_rx', 'rx_rz']
+    op_pool = ['H', 'rx_zz', 'zz_ry', 'zz_rx', 'zz_rz', 'xx_rz', 'yy_rx', 'rx_rz']
     g = regular_graph_generator(n=4, d=2)
-    result = namedtuple("result", ["epoch", "cand", "loss", "test_acc"])
+    result = namedtuple("result", ["epoch", "cand", "loss"])
 
     verbose = None
     dtype = tf.float32
     batch = 8
-    noise = np.random.normal(loc=0.0, scale=0.2, size=[repeat * 2 * p, c])
+    noise = np.random.normal(loc=0.0, scale=0.2, size=[2 * p, c])
     noise = tf.constant(noise, dtype=tf.float32)
-    noise = None
     network_opt = tf.keras.optimizers.Adam(learning_rate=0.1)  # network
     structure_opt = tf.keras.optimizers.Adam(
         learning_rate=0.1, beta_1=0.8, beta_2=0.99
@@ -113,7 +109,7 @@ if __name__ == '__main__':
     stp_regularization = None
     nnp_regularization = None
 
-    nnp_initial_value = np.random.normal(loc=0.23, scale=0.06, size=[repeat * 2 * p, c])
+    nnp_initial_value = np.random.normal(loc=0.23, scale=0.06, size=[2 * p, c])
     stp_initial_value = np.zeros([p, c])
     nnp = tf.Variable(initial_value=nnp_initial_value, dtype=dtype)
     stp = tf.Variable(initial_value=stp_initial_value, dtype=dtype)
@@ -131,8 +127,6 @@ if __name__ == '__main__':
         deri_nnp = []
         avcost2 = avcost1
         costl = []
-        test_acc_list = []
-
         if stp_regularization is not None:
             stp_penalty_gradient = stp_regularization(stp, nnp)
             if verbose:
@@ -149,9 +143,9 @@ if __name__ == '__main__':
         for _, gdata in zip(range(batch), g):
             preset = preset_byprob(prob)
             if noise is not None:
-                loss, gnnp, test_acc = qaoa_block_vag(gdata, nnp + noise, preset, repeat)
+                loss, gnnp = qaoa_block_vag(gdata, nnp + noise, preset)
             else:
-                loss, gnnp, test_acc = qaoa_block_vag(gdata, nnp, preset, repeat)
+                loss, gnnp = qaoa_block_vag(gdata, nnp, preset)
 
             gs = tf.tensor_scatter_nd_add(
                 tf.cast(-prob, dtype=dtype),
@@ -164,10 +158,8 @@ if __name__ == '__main__':
             )
             deri_nnp.append(gnnp)
             costl.append(loss.numpy())
-            test_acc_list.append(test_acc)
 
         avcost1 = tf.convert_to_tensor(np.mean(costl))
-        avtestacc = tf.convert_to_tensor(np.mean(test_acc_list))
 
         print(
             "batched average loss: ",
@@ -213,21 +205,7 @@ if __name__ == '__main__':
 
         epochs = np.arange(len(history))
         data = np.array([r.loss for r in history])
-        plt.figure()
         plt.plot(epochs, data)
         plt.xlabel("epoch")
-        plt.ylabel("objective (loss)")
-        plt.savefig("loss_plot.pdf")
-
-        test_acc_data = np.array([r.test_acc for r in history])
-        plt.figure()
-        plt.plot(epochs, test_acc_data)
-        plt.xlabel("epoch")
-        plt.ylabel("test acc")
-        plt.savefig("test_acc_plot.pdf")
-
-
-
-
-
-
+        plt.ylabel("objective")
+        plt.savefig("qaoa_block.pdf")
