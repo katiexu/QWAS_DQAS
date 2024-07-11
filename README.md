@@ -11,6 +11,8 @@ Run DQAS02.py: Hold the current best gate choices stable and train models by cha
 ### Phase3
 Run DQAS03.py: Retrieve the best topology from Phase2, train models by changing gate choices.
 
+### Repeat Phase2 and Phase3 to get new current best gate choices and topology.
+
 ### Phase4
 Run DQAS04.py: Re-train the current best model found in previous phases.
 
