@@ -5,7 +5,7 @@ import numpy as np
 from tensorcircuit.applications.graphdata import regular_graph_generator
 import tensorflow as tf
 from schemes import dqas_Scheme
-from FusionModel import dqas_translator
+from FusionModel import dqas_translator, dqas_translator2
 import inspect
 from collections import namedtuple
 from matplotlib import pyplot as plt
@@ -13,12 +13,18 @@ from Arguments import Arguments
 import random
 import torch
 
+if os.path.isfile('step2.history'):
+    with open('step2.history', 'rb') as f:
+        history = pickle.load(f)
+        enable, edges, loss, acc = min(history, key=lambda x: x[2])
+
 seed = 42
 torch.random.manual_seed(seed)
 random.seed(seed)
 np.random.seed(seed)
 tf.random.set_seed(seed)
 os.environ['TF_DETERMINISTIC_OPS'] = '1'
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
 args = Arguments()
 
@@ -32,8 +38,10 @@ def preset_byprob(prob):
         preset.append(j)
     return preset
 
+
 def get_preset(stp):
     return tf.argmax(stp, axis=1)
+
 
 def repr_op(element):
     if isinstance(element, str):
@@ -45,6 +53,7 @@ def repr_op(element):
     else:
         return element.__repr__  # type: ignore
 
+
 def get_var(name):
     """
     call in customized functions and grab variable within DQAF framework function by var name str
@@ -54,13 +63,14 @@ def get_var(name):
     """
     return inspect.stack()[2][0].f_locals[name]
 
+
 def record():
     return result(
         get_var("epoch"), get_var("cand_preset_repr"), get_var("avcost1").numpy(), get_var("avtestacc").numpy()
-        )
+    )
 
 
-def qaoa_block_vag(gdata, ops, nnp, preset, repeat):
+def qaoa_block_vag(ops, nnp, preset, repeat, enable, edges):
     nnp = nnp.numpy()
     pnnp = []
     chosen_ops = []
@@ -70,7 +80,7 @@ def qaoa_block_vag(gdata, ops, nnp, preset, repeat):
             pnnp.append([nnp[2 * i, j], nnp[2 * i + 1, j]])
             underscore_index = ops[j].index('_')
             first_op = ops[j][:underscore_index]
-            second_op = ops[j][underscore_index+1:]
+            second_op = ops[j][underscore_index + 1:]
             chosen_ops.append(first_op)
             chosen_ops.append(second_op)
         else:
@@ -78,10 +88,8 @@ def qaoa_block_vag(gdata, ops, nnp, preset, repeat):
             chosen_ops.append(ops[j])
         # pnnp.append([nnp[i, j]])
         # chosen_ops.append(ops[j])
-    edges = []
-    for e in gdata.edges:
-        edges.append(e)
-    design = dqas_translator(chosen_ops, edges, repeat,'full')
+
+    design = dqas_translator2(chosen_ops, edges, repeat, 'full', enable)
     # pnnp = array_to_tensor(np.array(pnnp))  # complex
     # pnnp = tf.ragged.constant(pnnp, dtype=getattr(tf, cons.dtypestr))
     design['pnnp'] = tf.ragged.constant(pnnp, dtype=dtype)
@@ -105,7 +113,8 @@ def qaoa_block_vag(gdata, ops, nnp, preset, repeat):
     gmatrix = tf.constant(gmatrix)
     return val_loss, gmatrix, test_acc
 
-def DQAS_search(stp, nnp, epoch):
+
+def DQAS_search(stp, nnp, epoch, enable, edges):
     prob = tf.math.exp(stp) / tf.tile(
         tf.math.reduce_sum(tf.math.exp(stp), axis=1)[:, tf.newaxis], [1, c]
     )  # softmax categorical probability
@@ -129,13 +138,13 @@ def DQAS_search(stp, nnp, epoch):
     else:
         nnp_penalty_gradient = 0.0
 
-    for _, gdata in zip(range(batch), g):
+    for _ in range(batch):
         preset = preset_byprob(prob)
         if noise is not None:
-            loss, gnnp, test_acc = qaoa_block_vag(gdata, op_pool, nnp + noise, preset, repeat)
+            loss, gnnp, test_acc = qaoa_block_vag(op_pool, nnp + noise, preset, repeat, enable, edges)
         else:
-            loss, gnnp, test_acc = qaoa_block_vag(gdata, op_pool, nnp, preset, repeat)
-
+            loss, gnnp, test_acc = qaoa_block_vag(op_pool, nnp, preset, repeat, enable, edges)
+        print('\033[34m'+f'batch: {_}/{batch}\tval_loss: {loss:.4f}')
         gs = tf.tensor_scatter_nd_add(
             tf.cast(-prob, dtype=dtype),
             tf.constant(list(zip(range(p), preset))),
@@ -193,7 +202,7 @@ def DQAS_search(stp, nnp, epoch):
 
 
 if __name__ == '__main__':
-
+    args = Arguments()
     p = 20
     c = 36
     repeat = 2
@@ -206,7 +215,7 @@ if __name__ == '__main__':
                'yy_rx', 'yy_ry', 'yy_rz', 'yy_xx', 'yy_yy', 'yy_zz',
                'zz_rx', 'zz_ry', 'zz_rz', 'zz_xx', 'zz_yy', 'zz_zz'
                ]
-    g = regular_graph_generator(n=4, d=2,seed=seed)
+
     result = namedtuple("result", ["epoch", "cand", "loss", "test_acc"])
 
     verbose = None
@@ -226,15 +235,16 @@ if __name__ == '__main__':
     nnp_initial_value = np.random.normal(loc=0.23, scale=0.06, size=[2 * repeat * p, c])
     stp_initial_value = np.zeros([p, c])
     history = []
-    if os.path.isfile('step'):
-        with open('step', 'rb') as f:
+    if os.path.isfile('step3.history'):
+        with open('step3.history', 'rb') as f:
             stp_initial_value, nnp_initial_value, history = pickle.load(f)
         epoch_init = len(history)
-
 
     nnp = tf.Variable(initial_value=nnp_initial_value, dtype=dtype)
     stp = tf.Variable(initial_value=stp_initial_value, dtype=dtype)
 
+    enable = np.ones((repeat, 80 // repeat, args.n_qubits), dtype=np.bool_)
+    # enable[0,1,1]=False
     avcost1 = 0
     dqas_epoch = 2000
 
@@ -242,10 +252,19 @@ if __name__ == '__main__':
         for epoch in range(epoch_init, dqas_epoch):
             try:
                 print("Epoch: ", epoch)
-                stp, nnp, cur_history = DQAS_search(stp, nnp, epoch)
+                stp, nnp, cur_history = DQAS_search(stp, nnp, epoch, enable, edges)
                 history.append(cur_history)
+                if len(history) > 50 and len(history) % 50 == 0:
+                    cur_loss = [h.loss for h in history[-50:]]
+                    last_loss = [h.loss for h in history[-100:-50]]
+                    eta = abs(sum(cur_loss) / len(cur_loss) - sum(last_loss) / len(last_loss))
+                    if eta < 0.001:
+                        idx = cur_loss.index(min(cur_loss)) - len(cur_loss)
+                        with open('best_net_3', 'wb') as f:
+                            pickle.dump((history[idx],edges), f)
+                        raise Exception("stop iteration.")
             finally:
-                with open('step', 'wb') as f:
+                with open('step3.history', 'wb') as f:
                     pickle.dump((stp, nnp, history), f)
     finally:
         epochs = np.arange(len(history))
@@ -265,13 +284,7 @@ if __name__ == '__main__':
         plt.savefig("test_acc_plot.pdf")
         plt.close()
 
-        with open('history.csv','w') as f:
-            print('epoch, loss, test_acc, cand',file=f)
+        with open('history3.csv', 'w') as f:
+            print('epoch, loss, test_acc, cand', file=f)
             for h in history:
                 print(h.epoch, h.loss, h.test_acc, ' '.join(h.cand), sep=',', file=f)
-
-
-
-
-
-

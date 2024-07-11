@@ -1,4 +1,6 @@
 import copy
+import traceback
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -29,7 +31,7 @@ def display(metrics):
     WHITE = '\033[37m'
     RESET = '\033[0m'
 
-    print(YELLOW + "\nTest Accuracy: {}".format(metrics) + RESET)
+    print(YELLOW + "Test Accuracy: {}".format(metrics) + RESET)
 
     
 def train(model, data_loader, optimizer, criterion, args):
@@ -85,63 +87,63 @@ def evaluate(model, data_loader, args):
     metrics = accuracy    
     return metrics
 
-def Scheme(design, task, weight='base', epochs=None, verbs=None, save=None):
-    random.seed(42)
-    np.random.seed(42)
-    torch.random.manual_seed(42)
-
-    args = Arguments(task)
-    if epochs == None:
-        epochs = args.epochs
-    
-    if task == 'MOSI':
-        dataloader = MOSIDataLoaders(args)
-    else:
-        dataloader = MNISTDataLoaders(args, task)
-   
-    train_loader, val_loader, test_loader = dataloader
-    model = QNet(args, design).to(args.device)
-    if weight != 'init':
-        if weight != 'base':
-            model.load_state_dict(weight, strict= False)
-        else:            
-            model.load_state_dict(torch.load('weights/base_fashion'))
-            # model.load_state_dict(torch.load('weights/mnist_best_3'))
-    criterion = nn.NLLLoss()    
-   
-    optimizer = optim.Adam(model.QuantumLayer.parameters(), lr=args.qlr)
-    train_loss_list, val_loss_list = [], []
-    best_val_loss = 0
-
-    start = time.time()
-    for epoch in range(epochs):
-        try:
-            train(model, train_loader, optimizer, criterion, args)
-        except Exception as e:
-            print('No parameter gate exists')
-        train_loss = test(model, train_loader, criterion, args)
-        train_loss_list.append(train_loss)
-        val_loss = evaluate(model, val_loader, args)
-        val_loss_list.append(val_loss)
-        metrics = evaluate(model, test_loader, args)
-        val_loss = 0.5 *(val_loss+train_loss[-1])
-        if val_loss > best_val_loss:
-            best_val_loss = val_loss
-            if not verbs: print(epoch, train_loss, val_loss_list[-1], metrics, 'saving model')
-            best_model = copy.deepcopy(model)           
-        else:
-            if not verbs: print(epoch, train_loss, val_loss_list[-1], metrics)        
-    end = time.time()    
-    # best_model = model
-    metrics = evaluate(best_model, test_loader, args)
-    display(metrics)
-    print("Running time: %s seconds" % (end - start))
-    report = {'train_loss_list': train_loss_list, 'val_loss_list': val_loss_list,
-              'best_val_loss': best_val_loss, 'mae': metrics}
-    
-    if save:
-        torch.save(best_model.state_dict(), 'weights/init_weight')
-    return best_model, report
+# def Scheme(design, task, weight='base', epochs=None, verbs=None, save=None):
+#     random.seed(42)
+#     np.random.seed(42)
+#     torch.random.manual_seed(42)
+#
+#     args = Arguments(task)
+#     if epochs == None:
+#         epochs = args.epochs
+#
+#     if task == 'MOSI':
+#         dataloader = MOSIDataLoaders(args)
+#     else:
+#         dataloader = MNISTDataLoaders(args, task)
+#
+#     train_loader, val_loader, test_loader = dataloader
+#     model = QNet(args, design).to(args.device)
+#     if weight != 'init':
+#         if weight != 'base':
+#             model.load_state_dict(weight, strict= False)
+#         else:
+#             model.load_state_dict(torch.load('weights/base_fashion'))
+#             # model.load_state_dict(torch.load('weights/mnist_best_3'))
+#     criterion = nn.NLLLoss()
+#
+#     optimizer = optim.Adam(model.QuantumLayer.parameters(), lr=args.qlr)
+#     train_loss_list, val_loss_list = [], []
+#     best_val_loss = 0
+#
+#     start = time.time()
+#     for epoch in range(epochs):
+#         try:
+#             train(model, train_loader, optimizer, criterion, args)
+#         except Exception as e:
+#             print('No parameter gate exists')
+#         train_loss = test(model, train_loader, criterion, args)
+#         train_loss_list.append(train_loss)
+#         val_loss = evaluate(model, val_loader, args)
+#         val_loss_list.append(val_loss)
+#         metrics = evaluate(model, test_loader, args)
+#         val_loss = 0.5 *(val_loss+train_loss[-1])
+#         if val_loss > best_val_loss:
+#             best_val_loss = val_loss
+#             if not verbs: print(epoch, train_loss, val_loss_list[-1], metrics, 'saving model')
+#             best_model = copy.deepcopy(model)
+#         else:
+#             if not verbs: print(epoch, train_loss, val_loss_list[-1], metrics)
+#     end = time.time()
+#     # best_model = model
+#     metrics = evaluate(best_model, test_loader, args)
+#     display(metrics)
+#     print("Running time: %s seconds" % (end - start))
+#     report = {'train_loss_list': train_loss_list, 'val_loss_list': val_loss_list,
+#               'best_val_loss': best_val_loss, 'mae': metrics}
+#
+#     if save:
+#         torch.save(best_model.state_dict(), 'weights/init_weight')
+#     return best_model, report
 
 
 def dqas_Scheme(design, task, weight='base', epochs=None, verbs=None, save=None):
@@ -171,16 +173,15 @@ def dqas_Scheme(design, task, weight='base', epochs=None, verbs=None, save=None)
     optimizer = optim.Adam(model.QuantumLayer.parameters(), lr=args.qlr)
     train_loss_list, val_acc_list = [], []
     best_val_acc = 0
-
+    model_grads=None
     start = time.time()
     for epoch in range(epochs):
         try:
             train(model, train_loader, optimizer, criterion, args)
         except Exception as e:
             print('No parameter gate exists')
-        model_grads = []
-        for param in model.parameters():
-            model_grads.append(param.grad.item())
+            traceback.print_exc()
+
         train_loss = test(model, train_loader, criterion, args)
         train_loss_list.append(train_loss)
         val_loss = test(model, val_loader, criterion, args)
@@ -194,17 +195,27 @@ def dqas_Scheme(design, task, weight='base', epochs=None, verbs=None, save=None)
             best_model = copy.deepcopy(model)
         else:
             if not verbs: print(epoch, train_loss, val_acc_list[-1], metrics)
-    end = time.time()
-    # best_model = model
-    metrics = evaluate(best_model, test_loader, args)
-    display(metrics)
-    print("Running time: %s seconds" % (end - start))
-    report = {'train_loss_list': train_loss_list, 'val_acc_list': val_acc_list,
-              'best_val_acc': best_val_acc, 'mae': metrics}
+
+        end = time.time()
+        # best_model = model
+        metrics = evaluate(best_model, test_loader, args)
+        display(metrics)
+        # print("Running time: %s seconds" % (end - start))
+        report = {'train_loss_list': train_loss_list, 'val_acc_list': val_acc_list,
+                  'best_val_acc': best_val_acc, 'mae': metrics}
+
+        if model_grads is None:
+            model_grads = []
+            for param in model.parameters():
+                if param.grad is not None:
+                    grads=param.grad.tolist()
+                    if len(grads[0])==1:
+                        grads[0]=grads[0]*3
+                    model_grads.append(grads)
 
     if save:
         torch.save(best_model.state_dict(), 'weights/init_weight')
-    return val_loss[0], model_grads
+    return val_loss[0], model_grads, metrics
 
 
 if __name__ == '__main__':
