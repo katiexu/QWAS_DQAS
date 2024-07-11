@@ -9,7 +9,7 @@ Run DQAS01.py: Initialize training and sampling using DQAS method to get the cur
 Run DQAS02.py: Hold the current best gate choices stable and train models by changing topologies.
 
 ### Phase3
-Run DQAS03.py: Retrieve the best topology from Phase2, train models by changing gate choices.
+Run DQAS03.py: Retrieve the best topology from Phase2, train models by sampling new gate choices using DQAS method.
 
 ### Repeat Phase2 and Phase3 to get new current best gate choices and topology.
 
