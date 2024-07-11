@@ -1,5 +1,10 @@
 # QWAS_DQAS
 
+## Code Functions
+
+### Phase1:
+Run DQAS01.py to initialize 
+
 ## Requirements
 
 python==3.7.12
