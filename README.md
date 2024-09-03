@@ -20,6 +20,8 @@ Run DQAS04.py: Re-train the current best model found in previous phases.
 
 ## Requirements
 
+### pip install -r requirement.txt
+
 python==3.7.12
 
 tensorflow==2.1.0
