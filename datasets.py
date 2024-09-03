@@ -61,11 +61,7 @@ import torch
 from torchquantum.dataset import MNIST
 
 
-def MNISTDataLoaders(args, task):
-    if task == 'MNIST':
-        FAHION = False
-    else:
-        FAHION = True
+def MNISTDataLoaders(args):
     dataset = MNIST(
         root='data',
         train_valid_split_ratio=args.train_valid_split_ratio,
@@ -77,7 +73,7 @@ def MNISTDataLoaders(args, task):
         digits_of_interest=args.digits_of_interest,
         n_test_samples=None,
         n_valid_samples=None,
-        fashion=FAHION,
+        fashion=args.fashion,
         n_train_samples=None
         )
     dataflow = dict()

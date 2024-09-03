@@ -1,100 +1,47 @@
-import os
-import pickle
-import copy
-import numpy as np
-from tensorcircuit.applications.graphdata import regular_graph_generator
-import tensorflow as tf
-from schemes import dqas_Scheme
-from FusionModel import dqas_translator, dqas_translator2
-import inspect
-from collections import namedtuple
-from matplotlib import pyplot as plt
-from Arguments import Arguments
-import random
-import torch
+import os.path
 
-seed = 42
-torch.random.manual_seed(seed)
-random.seed(seed)
-np.random.seed(seed)
-tf.random.set_seed(seed)
-os.environ['TF_DETERMINISTIC_OPS'] = '1'
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+from utils import *
+from datasets import MNISTDataLoaders
 
-args = Arguments()
-with open('step.history', 'rb') as f:
-    result = namedtuple("result", ["epoch", "cand", "loss", "test_acc"])
-    stp_initial_value, nnp_initial_value, history, edges = pickle.load(f)
-    cur_acc = [h.test_acc for h in history]
-    idx = cur_acc.index(max(cur_acc)) - len(cur_acc) -1
-    his = history[idx]
-    edges = edges[idx]
-    nnp = tf.Variable(initial_value=nnp_initial_value, dtype=tf.float32)
-    stp = tf.Variable(initial_value=stp_initial_value, dtype=tf.float32)
-    print(his.cand * 6)
-    chosen_ops = his.cand * 6
-    print(edges)
+def init_state():
+    with open('phase1.history', 'rb') as f:
+        history = pickle.load(f)
+        cur_acc = [acc for _, _, _, acc, _, _ in history]
+        idx = cur_acc.index(max(cur_acc)) - len(cur_acc)
+
+        _, nnp_initial_value, _, _, edges, chosen_ops = history[idx]
+        nnp = tf.Variable(initial_value=nnp_initial_value, dtype=tf.float32)
+
+        print(display.BLUE,'load from phase1:')
+        print(f'\tedges: {edges[0][0]}')
+        print(f'\tchosen_ops: {chosen_ops[:Arguments.p]} * {Arguments.n_repeat}{display.RESET}')
+
+    enable = np.ones((Arguments.n_repeat, Arguments.p, Arguments.n_qubits), dtype=np.bool_)
+    history = []
+    min_loss = 5
+    max_acc = 0
+    if os.path.isfile('phase23.history'):
+        with open('phase23.history', 'rb') as f:
+            history = pickle.load(f)
+            if len(history)>0:
+                _,nnp, chosen_ops, edges, enable, min_loss, max_acc= history[-1]
+    return nnp, chosen_ops, edges, enable, history, min_loss, max_acc
 
 
-def preset_byprob(prob):
-    preset = []
-    p = prob.shape[0]
-    c = prob.shape[1]
-    for i in range(p):
-        j = np.random.choice(np.arange(c), p=np.array(prob[i]))
-        preset.append(j)
-    return preset
-
-
-def get_preset(stp):
-    return tf.argmax(stp, axis=1)
-
-
-def repr_op(element):
-    if isinstance(element, str):
-        return element
-    if isinstance(element, list) or isinstance(element, tuple):
-        return str(tuple([repr_op(e) for e in element]))
-    if callable(element.__repr__):
-        return element.__repr__()  # type: ignore
-    else:
-        return element.__repr__  # type: ignore
-
-
-def get_var(name):
-    """
-    call in customized functions and grab variable within DQAF framework function by var name str
-
-    :param name:
-    :return:
-    """
-    return inspect.stack()[2][0].f_locals[name]
-
-
-def qaoa_block_vag(edges, pnnp, chosen_ops, enable):
-    design = dqas_translator2(chosen_ops, edges, repeat, 'full', enable)
-    design['pnnp'] = tf.ragged.constant(pnnp, dtype=dtype)
+def qaoa_block_vag(edges, pnnp, chosen_ops, enable,scheme_epochs):
+    design = dqas_translator(chosen_ops, edges, Arguments.n_repeat, 'full', enable)
+    design['pnnp'] = tf.ragged.constant(pnnp, dtype=tf.float32)
     design['edges'] = edges
-
-    val_loss, model_grads, test_acc = dqas_Scheme(design, 'MNIST', 'init', 10)
+    dataloader = MNISTDataLoaders(Arguments())
+    val_loss, model_grads, test_acc = dqas_Scheme(design, dataloader, scheme_epochs)
     return val_loss, test_acc
 
 
-def DQAS_search(enable, edges):
-    pnnp = make_pnnp(nnp,op_pool)
-    loss, test_acc = qaoa_block_vag(edges, pnnp, chosen_ops, enable)
+def DQAS_search(enable, edges,nnp,chosen_ops,scheme_epochs):
+    pnnp = make_pnnp(nnp, chosen_ops)
+    loss, test_acc = qaoa_block_vag(edges, pnnp, chosen_ops, enable,scheme_epochs)
     return loss, test_acc
 
-def make_pnnp(nnp,ops:list):
-    nnp = nnp.numpy()
-    pnnp = []
-    for i, op in enumerate(chosen_ops):
-        j=ops.index(op)
-        if 'u' in op:
-            pnnp.append([nnp[i, j]])
-        else:
-            pnnp.append([nnp[i, j][0:1]])
-    return pnnp
 
 def change(enable, edges):
     newenable = enable.copy()
@@ -105,63 +52,44 @@ def change(enable, edges):
             if idx >= 0:
                 newenable[r, l, idx] = (not newenable[r, l, idx])
 
-            idx = random.randrange(-4, enable.shape[2])
+            idx = random.randrange(-4, edges.shape[2])
             if idx >= 0:
                 newedges[r, l, idx, 0] = random.randrange(enable.shape[2])
                 newedges[r, l, idx, 1] = random.randrange(enable.shape[2])
     assert not (enable == newenable).all()
-    assert not (edges == newedges).all()
+    # assert not (edges == newedges).all()
     return newenable, newedges
 
 
-if __name__ == '__main__':
-    args = Arguments()
-    p = 20
+def main(epochs = 2000, limit = 30,scheme_epochs=5):
+    nnp, chosen_ops, edges, enable, history, min_loss, max_acc = init_state()
+    start=len([h for h in history[::-1] if h[0]=='phase2'])
 
-    repeat = 6
-    op_pool = ['rx', 'ry', 'rz', 'xx', 'yy', 'zz', 'u3', 'cu3']
-    c = 8
-
-    verbose = None
-    dtype = tf.float32
-
-    enable = np.ones((repeat, p, args.n_qubits), dtype=np.bool_)
-    edges = np.array([[edges.copy() for l in range(enable.shape[1])] for r in range(repeat)])
-    history = []
-
-    min_loss = 5
-    max_acc = 0
-    if os.path.isfile('step2.history'):
-        with open('step2.history', 'rb') as f:
-            history = pickle.load(f)
-            if len(history) > 0:
-                enable, edges, min_loss, max_acc = history[-1]
-    edges = np.array(edges)
-    tmpenable, tmpedges = enable, edges
-    dqas_epoch = 2000
-
-    limit = 30
     curr = 0
+    tmpenable, tmpedges = enable, edges
     try:
-        for epoch in range(len(history), dqas_epoch):
+        for epoch in range(start, epochs):
             try:
-                print("Epoch: ", epoch)
-                loss, acc = DQAS_search(tmpenable, tmpedges)
-                print('\033[34m' + f'val_loss: {loss:.4f}\t acc: {acc:.4f} \tstep: {curr}/{limit}\033[0m')
+                print("Phase2 Epoch: ", epoch)
+                loss, acc = DQAS_search(tmpenable, tmpedges,nnp,chosen_ops,scheme_epochs)
                 curr += 1
                 if acc > max_acc:
                     curr = 0
                     max_acc = acc
                     enable, edges = tmpenable, tmpedges
-                    history.append((enable, edges, loss, acc))
+                    history.append(('phase2',nnp, chosen_ops, edges, enable, loss, acc))
+                print('\033[34m' + f'val_loss: {loss:.4f}\t acc: {max_acc:.4f} \tstep: {curr}/{limit}\033[0m')
                 if curr == limit:
-                    raise Exception('stop iteration')
+                    print(display.RED + "stop iteration phase2." + display.RESET)
+                    break
                 tmpenable, tmpedges = change(enable, edges)
             finally:
-                with open('step2.history', 'wb') as f:
+                with open('phase23.history', 'wb') as f:
                     pickle.dump((history), f)
     finally:
-        with open('step2_result.csv', 'w') as f:
-            print('epoch', 'loss', 'acc', sep=',\t', file=f)
+        with open('phase23_result.csv', 'w') as f:
+            print('type', 'epoch', 'chosen ops', 'loss', 'acc', sep=',\t', file=f)
             for i in range(len(history)):
-                print(i, history[i][2], history[i][3], sep=',\t', file=f)
+                print(history[i][0], i, ' '.join(history[i][2]), history[i][-2], history[i][-1], sep=',\t', file=f)
+if __name__ == '__main__':
+    main()

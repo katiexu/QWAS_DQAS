@@ -1,270 +1,151 @@
-import os
-import pickle
-
-import numpy as np
-from tensorcircuit.applications.graphdata import regular_graph_generator
-import tensorflow as tf
-from schemes import dqas_Scheme
-from FusionModel import dqas_translator
-import inspect
-from collections import namedtuple
-from matplotlib import pyplot as plt
-from Arguments import Arguments
-import random
-import torch
-
-seed = 42
-torch.random.manual_seed(seed)
-random.seed(seed)
-np.random.seed(seed)
-tf.random.set_seed(seed)
-os.environ['TF_DETERMINISTIC_OPS'] = '1'
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-
-args = Arguments()
+from utils import *
+from datasets import MNISTDataLoaders
 
 
-def preset_byprob(prob):
-    preset = []
-    p = prob.shape[0]
-    c = prob.shape[1]
-    for i in range(p):
-        j = np.random.choice(np.arange(c), p=np.array(prob[i]))
-        preset.append(j)
-    return preset
+def load_state():
+    nnp_initial_value = np.random.normal(loc=0.23, scale=0.06, size=[Arguments.n_layers, len(Arguments.op_pool), 3])
+    stp_initial_value = np.zeros([Arguments.p, len(Arguments.op_pool)])
+
+    history = []
+    if os.path.isfile('phase1.history'):
+        with open('phase1.history', 'rb') as f:
+            history = pickle.load(f)
+            if len(history) > 0:
+                stp_initial_value, nnp_initial_value, cost, acc, edges, chosen_ops = history[-1]
+
+    nnp = tf.Variable(initial_value=nnp_initial_value, dtype=tf.float32)
+    stp = tf.Variable(initial_value=stp_initial_value, dtype=tf.float32)
+    return stp, nnp, history
 
 
-def get_preset(stp):
-    return tf.argmax(stp, axis=1)
-
-
-def repr_op(element):
-    if isinstance(element, str):
-        return element
-    if isinstance(element, list) or isinstance(element, tuple):
-        return str(tuple([repr_op(e) for e in element]))
-    if callable(element.__repr__):
-        return element.__repr__()  # type: ignore
-    else:
-        return element.__repr__  # type: ignore
-
-
-def get_var(name):
-    """
-    call in customized functions and grab variable within DQAF framework function by var name str
-
-    :param name:
-    :return:
-    """
-    return inspect.stack()[2][0].f_locals[name]
-
-
-def record():
-    return result(
-        get_var("epoch"), get_var("cand_preset_repr"), get_var("avcost1").numpy(), get_var("avtestacc").numpy()
-    )
-
-
-def qaoa_block_vag(gdata, ops, nnp, preset, repeat, enable):
-    nnp = nnp.numpy()
-    pnnp = []
-    chosen_ops = []
+def qaoa_block_vag(edges, nnp, preset, repeat, enable, dataloader, Scheme_epoch):
     repeated_preset = preset * repeat
-    for i, j in enumerate(repeated_preset):
-        if 'u' in ops[j]:
-            pnnp.append([nnp[i, j]])
-            chosen_ops.append(ops[j])
-        else:
-            pnnp.append([nnp[i, j][0:1]])
-            chosen_ops.append(ops[j])
-        # pnnp.append([nnp[i, j]])
-        # chosen_ops.append(ops[j])
-    edges = []
-    for e in gdata.edges:
-        edges.append(e)
+    chosen_ops = get_chosen_ops(repeated_preset)
+    pnnp = make_pnnp(nnp, chosen_ops)
+
     design = dqas_translator(chosen_ops, edges, repeat, 'full', enable)
-    # pnnp = array_to_tensor(np.array(pnnp))  # complex
-    # pnnp = tf.ragged.constant(pnnp, dtype=getattr(tf, cons.dtypestr))
-    design['pnnp'] = tf.ragged.constant(pnnp, dtype=dtype)
-    design['preset'] = preset
+    design['pnnp'] = tf.ragged.constant(pnnp, dtype=tf.float32)
     design['edges'] = edges
+    val_loss, model_grads, test_acc = dqas_Scheme(design, dataloader, Scheme_epoch)
+    val_loss = tf.constant(val_loss, dtype=tf.float32)
 
-    val_loss, model_grads, test_acc = dqas_Scheme(design, 'MNIST', 'init', 5)
-    val_loss = tf.constant(val_loss, dtype=dtype)
-    gr = tf.constant(model_grads, dtype=dtype)
+    gr = tf.constant(model_grads, dtype=tf.float32)
     gr = design['pnnp'].with_values(gr)
-
-    gmatrix = np.zeros_like(nnp)
+    g_nnp = np.zeros_like(nnp.numpy())
     for j in range(gr.shape[0]):
-        gmatrix[j, repeated_preset[j]] = gr[j][0]
+        g_nnp[j, repeated_preset[j]] = gr[j][0]
+    g_nnp = tf.constant(g_nnp)
 
-    gmatrix = tf.constant(gmatrix)
-    return val_loss, gmatrix, test_acc
+    return val_loss, g_nnp, test_acc, chosen_ops
 
 
-def DQAS_search(stp, nnp, epoch, enable):
-    prob = tf.math.exp(stp) / tf.tile(
-        tf.math.reduce_sum(tf.math.exp(stp), axis=1)[:, tf.newaxis], [1, c]
-    )  # softmax categorical probability
+def update_stp(stp, deri_stp):
+    stp_penalty_gradient = 0
+    newstp = tf.Variable(initial_value=stp.numpy().copy(), dtype=tf.float32)
+    batched_gs = tf.math.reduce_mean(tf.convert_to_tensor(deri_stp, dtype=tf.float32), axis=0)
+    structure_opt = tf.keras.optimizers.Adam(learning_rate=0.1, beta_1=0.8, beta_2=0.99)  # structure
+    structure_opt.apply_gradients(
+        zip([batched_gs + stp_penalty_gradient], [newstp])
+    )
+    return newstp
 
-    deri_stp = []
-    deri_nnp = []
-    avcost2 = 0
-    costl = []
-    test_acc_list = []
 
-    if stp_regularization is not None:
-        stp_penalty_gradient = stp_regularization(stp, nnp)
-        if verbose:
-            print("stp_penalty_gradient:", stp_penalty_gradient.numpy())
-    else:
-        stp_penalty_gradient = 0.0
-    if nnp_regularization is not None:
-        nnp_penalty_gradient = nnp_regularization(stp, nnp)
-        if verbose:
-            print("nnpp_penalty_gradient:", nnp_penalty_gradient.numpy())
-    else:
-        nnp_penalty_gradient = 0.0
+def update_nnp(nnp, deri_nnp):
+    newnnp = tf.Variable(initial_value=nnp.numpy().copy(), dtype=tf.float32)
+    nnp_penalty_gradient = 0
+    batched_gnnp = tf.math.reduce_mean(tf.convert_to_tensor(deri_nnp, dtype=tf.float32), axis=0)
+    network_opt = tf.keras.optimizers.Adam(learning_rate=0.1)  # network
+    network_opt.apply_gradients(
+        zip([batched_gnnp + nnp_penalty_gradient], [newnnp])
+    )
+    return newnnp
 
-    edges = None
-    min_loss = 5
-    for _, gdata in zip(range(batch), g):
-        preset = preset_byprob(prob)
-        if noise is not None:
-            loss, gnnp, test_acc = qaoa_block_vag(gdata, op_pool, nnp + noise, preset, repeat, enable)
-        else:
-            loss, gnnp, test_acc = qaoa_block_vag(gdata, op_pool, nnp, preset, repeat, enable)
+
+def generate_edges():
+    edges_input = []
+    for i in range(4):
+        edges_input.append(random.sample(range(Arguments.n_qubits), 2))
+    print('\tedges:', edges_input)
+    edges_input = np.array(
+        [[edges_input.copy() for l in range(Arguments.p)] for r in range(Arguments.n_repeat)])
+    return edges_input
+
+
+def DQAS_search(stp, nnp, scheme_epochs):
+    prob = tf.math.exp(stp) / tf.tile(tf.math.reduce_sum(tf.math.exp(stp), axis=1)[:, tf.newaxis],
+                                      [1, len(Arguments.op_pool)])  # softmax categorical probability
+    preset = preset_byprob(prob)
+    print('chosen_ops: ', get_chosen_ops(preset))
+    deri_stp, deri_nnp, costl, test_acc_list, edges, ops_list = [], [], [], [], [], []
+    dataloader = MNISTDataLoaders(Arguments())
+    enable = np.ones((Arguments.n_repeat, Arguments.p, Arguments.n_qubits), dtype=np.bool_)
+    for _ in range(8):
+        edges_input = generate_edges()
+
+        loss, gnnp, test_acc, chosen_ops = qaoa_block_vag(edges_input, nnp, preset, Arguments.n_repeat, enable,
+                                                          dataloader, scheme_epochs)
 
         gs = tf.tensor_scatter_nd_add(
-            tf.cast(-prob, dtype=dtype),
-            tf.constant(list(zip(range(p), preset))),
-            tf.ones([p], dtype=dtype),
-        )  # \nabla lnp
-        deri_stp.append(
-            (tf.cast(loss, dtype=dtype) - tf.cast(avcost2, dtype=dtype))
-            * tf.cast(gs, dtype=dtype)
+            tf.cast(-prob, dtype=tf.float32),
+            tf.constant(list(zip(range(Arguments.p), preset))),
+            tf.ones([Arguments.p], dtype=tf.float32),
         )
+        deri_stp.append(
+            (tf.cast(loss, dtype=tf.float32) - tf.cast(0, dtype=tf.float32)) * tf.cast(gs, dtype=tf.float32))
         deri_nnp.append(gnnp)
+
         costl.append(loss.numpy())
         test_acc_list.append(test_acc)
-        if loss.numpy() < min_loss:
-            min_loss = loss.numpy()
-            edges = [e for e in gdata.edges]
+        edges.append(edges_input)
+        ops_list.append(chosen_ops)
 
-    avcost1 = tf.convert_to_tensor(np.min(costl))
-    avtestacc = tf.convert_to_tensor(np.max(test_acc_list))
+    newnnp = update_nnp(nnp, deri_nnp)
+    newstp = update_stp(stp, deri_stp)
 
-    print(
-        "batched average loss: ",
-        np.mean(costl),
-        " batched loss std: ",
-        np.std(costl),
-        "\nmin_loss: ",
-        avcost1.numpy(),  # type: ignore
-    )
+    # cand_preset = get_preset(stp).numpy()
+    # cand_preset_repr = [repr_op(Arguments.op_pool[f]) for f in cand_preset]
+    # print("best candidates so far:", cand_preset_repr)
 
-    batched_gs = tf.math.reduce_mean(
-        tf.convert_to_tensor(deri_stp, dtype=dtype), axis=0
-    )
-    batched_gnnp = tf.math.reduce_mean(
-        tf.convert_to_tensor(deri_nnp, dtype=dtype), axis=0
-    )
-    if verbose:
-        print("batched gradient of stp: \n", batched_gs.numpy())
-        print("batched gradient of nnp: \n", batched_gnnp.numpy())
+    max_idx = np.argmax(test_acc_list)
 
-    network_opt.apply_gradients(
-        zip([batched_gnnp + nnp_penalty_gradient], [nnp])
-    )
-    structure_opt.apply_gradients(
-        zip([batched_gs + stp_penalty_gradient], [stp])
-    )
-    if verbose:
-        print(
-            "strcuture parameter: \n",
-            stp.numpy(),
-            "\n network parameter: \n",
-            nnp.numpy(),
-        )
-
-    cand_preset = get_preset(stp).numpy()
-    cand_preset_repr = [repr_op(op_pool[f]) for f in cand_preset]
-    print("best candidates so far:", cand_preset_repr)
-
-    return stp, nnp, record(), edges
+    return newstp, newnnp, costl[max_idx], test_acc_list[max_idx], edges[max_idx], ops_list[max_idx]
 
 
-if __name__ == '__main__':
-    args = Arguments()
-    p = 20
+def main(epochs=200, threshold=20, scheme_epochs=5):
+    set_seed(42)
 
-    repeat = 6
+    stp, nnp, history = load_state()
 
-    op_pool = ['rx', 'ry', 'rz', 'xx', 'yy', 'zz', 'u3', 'cu3']
-    # op_pool = [] * 15
-    # op_pool = ['rx_ry', 'rx_rz', 'rx_xx', 'rx_yy', 'rx_zz',
-    #            'ry_rx', 'ry_rz', 'ry_xx', 'ry_yy', 'ry_zz',
-    #            'rz_rx', 'rz_ry', 'rz_xx', 'rz_yy', 'rz_zz',
-    #            'xx_rx', 'xx_ry', 'xx_rz', 'xx_yy', 'xx_zz',
-    #            'yy_rx', 'yy_ry', 'yy_rz', 'yy_xx', 'yy_zz',
-    #            'zz_rx', 'zz_ry', 'zz_rz', 'zz_xx', 'zz_yy'
-    #            ]
-
-    c = len(op_pool)
-    g = regular_graph_generator(n=4, d=2, seed=seed)
-    result = namedtuple("result", ["epoch", "cand", "loss", "test_acc"])
-
-    verbose = None
-    dtype = tf.float32
-    batch = 8
-    noise = None
-    # noise = np.random.normal(loc=0.0, scale=0.2, size=[2 * repeat * p, c])
-    # noise = tf.constant(noise, dtype=tf.float32)
-    network_opt = tf.keras.optimizers.Adam(learning_rate=0.1)  # network
-    structure_opt = tf.keras.optimizers.Adam(
-        learning_rate=0.1, beta_1=0.8, beta_2=0.99
-    )  # structure
-    stp_regularization = None
-    nnp_regularization = None
-
-    epoch_init = 0
-
-    nnp_initial_value = np.random.normal(loc=0.23, scale=0.06, size=[repeat * p, c, 3])
-    stp_initial_value = np.zeros([p, c])
-    history = []
-    edges = []
-    if os.path.isfile('step.history'):
-        with open('step.history', 'rb') as f:
-            stp_initial_value, nnp_initial_value, history, edges = pickle.load(f)
-        epoch_init = len(history)
-
-    nnp = tf.Variable(initial_value=nnp_initial_value, dtype=dtype)
-    stp = tf.Variable(initial_value=stp_initial_value, dtype=dtype)
-
-    enable = np.ones((repeat, p, args.n_qubits), dtype=np.bool_)
-    # enable[0,1,1]=False
-    avcost1 = 0
-    dqas_epoch = 200
-
+    epoch_init = len(history)
+    newstp, newnnp = stp, nnp
     try:
-        for epoch in range(epoch_init, dqas_epoch):
+        for epoch in range(epoch_init, epochs):
             try:
-                print("Epoch: ", epoch)
-                stp, nnp, cur_history, edge = DQAS_search(stp, nnp, epoch, enable)
-                history.append(cur_history)
-                edges.append(edge)
-                if len(history) > 20 and len(history) % 20 == 0:
-                    cur_loss = [h.loss for h in history[-20:]]
-                    last_loss = [h.loss for h in history[-40:-20]]
+                stp = newstp
+                nnp = newnnp
+                print("DQAS Epoch: ", epoch)
+                newstp, newnnp, cost, acc, edges, chosen_ops = DQAS_search(stp, nnp, scheme_epochs)
+                history.append((stp, nnp, cost, acc, edges, chosen_ops))
+                if len(history) > threshold and len(history) % threshold == 0:
+                    cur_loss = [h[2] for h in history[-threshold:]]
+                    last_loss = [h[2] for h in history[-threshold * 2:-threshold]]
                     eta = abs(sum(cur_loss) / len(cur_loss) - sum(last_loss) / len(last_loss))
                     if eta < 0.001:
-                        raise Exception("stop iteration.")
+                        print(display.RED + "stop iteration phase1" + display.RESET)
+                        break
             finally:
-                with open('step.history', 'wb') as f:
-                    pickle.dump((stp, nnp, history, edges), f)
+                with open('phase1.history', 'wb') as f:
+                    pickle.dump((history), f)
+
     finally:
+        with open('phase1.csv', 'w') as f:
+            print('epoch, loss, test_acc, edges, chosen_ops', file=f)
+            for epoch in range(len(history)):
+                stp, nnp, cost, acc, edges, chosen_ops = history[epoch]
+                print(epoch, cost, acc, f'"{edges[0][0].tolist()}"',f'"{chosen_ops[:Arguments.p]}"' ,sep=',', file=f)
+
         epochs = np.arange(len(history))
-        data = np.array([r.loss for r in history])
+        data = np.array([r[2] for r in history])
         plt.figure()
         plt.plot(epochs, data)
         plt.xlabel("epoch")
@@ -272,7 +153,7 @@ if __name__ == '__main__':
         plt.savefig("loss_plot.pdf")
         plt.close()
 
-        test_acc_data = np.array([r.test_acc for r in history])
+        test_acc_data = np.array([r[3] for r in history])
         plt.figure()
         plt.plot(epochs, test_acc_data)
         plt.xlabel("epoch")
@@ -280,7 +161,8 @@ if __name__ == '__main__':
         plt.savefig("test_acc_plot.pdf")
         plt.close()
 
-        with open('history.csv', 'w') as f:
-            print('epoch, loss, test_acc, cand', file=f)
-            for h in history:
-                print(h.epoch, h.loss, h.test_acc, ' '.join(h.cand), sep=',', file=f)
+
+
+
+if __name__ == '__main__':
+    main()

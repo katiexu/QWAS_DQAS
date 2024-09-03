@@ -7,10 +7,11 @@ import torchquantum.functional as tqf
 from math import pi
 import torch.nn.functional as F
 from torchquantum.encoding import encoder_op_list_name_dict
-from Arguments import Arguments
 import numpy as np
+from Arguments import Arguments
 
 args = Arguments()
+
 
 
 def gen_arch(change_code, base_code):  # start from 1, not 0
@@ -50,33 +51,36 @@ def prune_single(change_code):
     return single_dict
 
 
-def translator(single_code, enta_code, trainable, base_code):
-    updated_design = {}
-    updated_design = prune_single(single_code)
-    net = gen_arch(enta_code, base_code)
+# def translator(single_code, enta_code, trainable, base_code):
+#     updated_design = {}
+#     updated_design = prune_single(single_code)
+#     net = gen_arch(enta_code, base_code)
+#
+#     if trainable == 'full' or enta_code == None:
+#         updated_design['change_qubit'] = None
+#     else:
+#         if type(enta_code[0]) != type([]): enta_code = [enta_code]
+#         updated_design['change_qubit'] = enta_code[-1][0]
+#
+#     # num of layers
+#     updated_design['n_layers'] = args.n_layers
+#
+#     for layer in range(updated_design['n_layers']):
+#         # categories of single-qubit parametric gates
+#         for i in range(args.n_qubits):
+#             updated_design['rot' + str(layer) + str(i)] = 'U3'
+#         # categories and positions of entangled gates
+#         for j in range(args.n_qubits):
+#             if net[j + layer * args.n_qubits] > 0:
+#                 updated_design['enta' + str(layer) + str(j)] = ('CU3', [j, net[j + layer * args.n_qubits] - 1])
+#             else:
+#                 updated_design['enta' + str(layer) + str(j)] = ('CU3', [abs(net[j + layer * args.n_qubits]) - 1, j])
+#
+#     updated_design['total_gates'] = updated_design['n_layers'] * args.n_qubits * 2
+#     return updated_design
 
-    if trainable == 'full' or enta_code == None:
-        updated_design['change_qubit'] = None
-    else:
-        if type(enta_code[0]) != type([]): enta_code = [enta_code]
-        updated_design['change_qubit'] = enta_code[-1][0]
 
-    # num of layers
-    updated_design['n_layers'] = args.n_layers
 
-    for layer in range(updated_design['n_layers']):
-        # categories of single-qubit parametric gates
-        for i in range(args.n_qubits):
-            updated_design['rot' + str(layer) + str(i)] = 'U3'
-        # categories and positions of entangled gates
-        for j in range(args.n_qubits):
-            if net[j + layer * args.n_qubits] > 0:
-                updated_design['enta' + str(layer) + str(j)] = ('CU3', [j, net[j + layer * args.n_qubits] - 1])
-            else:
-                updated_design['enta' + str(layer) + str(j)] = ('CU3', [abs(net[j + layer * args.n_qubits]) - 1, j])
-
-    updated_design['total_gates'] = updated_design['n_layers'] * args.n_qubits * 2
-    return updated_design
 
 
 def dqas_translator(chosen_ops, edges, repeat, trainable, enable):
@@ -101,7 +105,7 @@ def dqas_translator(chosen_ops, edges, repeat, trainable, enable):
     for r in range(updated_design['repeat']):
         for layer in range(updated_design['n_layers']):
             # single-qubit gates
-            for i in range(args.n_qubits):
+            for i in range(Arguments.n_qubits):
                 if enable[r, layer, i]:
                     if chosen_ops[layer] == 'rx':
                         updated_design['rot' + str(r) + str(layer) + str(i)] = 'RX'
@@ -117,63 +121,11 @@ def dqas_translator(chosen_ops, edges, repeat, trainable, enable):
                     updated_design['rot' + str(r) + str(layer) + str(i)] = 'N/A'
 
             # entangled gates
-            for j in range(args.n_qubits):
-                if edges[j][0] == edges[j][1]:
-                    updated_design['enta' + str(r) + str(layer) + f'edge{j}'] = 'N/A'
-                elif chosen_ops[layer] == 'xx':
-                    updated_design['enta' + str(r) + str(layer) + f'edge{j}'] = ('RXX', [edges[j][0], edges[j][1]])
-                elif chosen_ops[layer] == 'yy':
-                    updated_design['enta' + str(r) + str(layer) + f'edge{j}'] = ('RYY', [edges[j][0], edges[j][1]])
-                elif chosen_ops[layer] == 'zz':
-                    updated_design['enta' + str(r) + str(layer) + f'edge{j}'] = ('RZZ', [edges[j][0], edges[j][1]])
-                elif chosen_ops[layer] == 'cu3':
-                    updated_design['enta' + str(r) + str(layer) + f'edge{j}'] = ('CU3', [edges[j][0], edges[j][1]])
-                else:
-                    updated_design['enta' + str(r) + str(layer) + f'edge{j}'] = 'N/A'
-
-    return updated_design
-
-
-def dqas_translator2(chosen_ops, edges, repeat, trainable, enable):
-    updated_design = {}
-    # updated_design = prune_single(single_code)
-    # net = gen_arch(enta_code, base_code)
-
-    # if trainable == 'full' or enta_code == None:
-    if trainable == 'full':
-        updated_design['change_qubit'] = None
-    # else:
-    #     if type(enta_code[0]) != type([]): enta_code = [enta_code]
-    #     updated_design['change_qubit'] = enta_code[-1][0]
-
-    # num of layers
-    # updated_design['n_layers'] = args.n_layers
-    updated_design['n_layers'] = int(len(chosen_ops) / repeat)
-    updated_design['repeat'] = repeat
-
-    # for i in range(len(chosen_ops)):
-    #     if len(chosen_ops[i]) != 1:
-    for r in range(updated_design['repeat']):
-        for layer in range(updated_design['n_layers']):
-            # single-qubit gates
-            for i in range(args.n_qubits):
-                if enable[r, layer, i]:
-                    if chosen_ops[layer] == 'rx':
-                        updated_design['rot' + str(r) + str(layer) + str(i)] = 'RX'
-                    elif chosen_ops[layer] == 'ry':
-                        updated_design['rot' + str(r) + str(layer) + str(i)] = 'RY'
-                    elif chosen_ops[layer] == 'rz':
-                        updated_design['rot' + str(r) + str(layer) + str(i)] = 'RZ'
-                    elif chosen_ops[layer] == 'u3':
-                        updated_design['rot' + str(r) + str(layer) + str(i)] = 'U3'
-                    else:
-                        updated_design['rot' + str(r) + str(layer) + str(i)] = 'N/A'
-                else:
-                    updated_design['rot' + str(r) + str(layer) + str(i)] = 'N/A'
-
-            # entangled gates
-            for j in range(args.n_qubits):
-                left, right = edges[r][layer][j][0], edges[r][layer][j][1]
+            for j in range(Arguments.n_qubits):
+                try:
+                    left, right = edges[r][layer][j][0], edges[r][layer][j][1]
+                except:
+                    pass
                 if left == right:
                     updated_design['enta' + str(r) + str(layer) + f'edge{j}'] = 'N/A'
                 elif chosen_ops[layer] == 'xx':
@@ -220,7 +172,7 @@ class TQLayer(tq.QuantumModule):
         self.n_wires = self.args.n_qubits
         # self.encoder = tq.GeneralEncoder(encoder_op_list_name_dict['4x4_ryzxy'])
         # self.uploading = [tq.GeneralEncoder(encoder_op_list_name_dict['{}x4_ryzxy'.format(i)]) for i in range(4)]
-        self.uploading = [tq.GeneralEncoder(self.data_uploading(i)) for i in range(4)]
+        self.uploading = [tq.GeneralEncoder(self.data_uploading(i)) for i in range(Arguments.n_qubits)]
 
         self.gates = tq.QuantumModuleDict()
         # self.rots, self.entas = tq.QuantumModuleList(), tq.QuantumModuleList()
@@ -303,18 +255,24 @@ class TQLayer(tq.QuantumModule):
 
     def forward(self, x):
         bsz = x.shape[0]
-        x = F.avg_pool2d(x, 6)  # 'down_sample_kernel_size' = 6
-        x = x.view(bsz, 4, 4)
-        # tmp = torch.cat((x.view(bsz, -1), torch.zeros(bsz, 4)), dim=-1)
-        # x = tmp.reshape(bsz, -1, 10).transpose(1,2)
+        kernel_size = args.kernel
+        x = F.avg_pool2d(x, kernel_size)  # 'down_sample_kernel_size' = 6
+        if kernel_size == 4:
+            x = x.view(bsz, 6, 6)
+            tmp = torch.cat((x.view(bsz, -1), torch.zeros(bsz, 4)), dim=-1)
+            x = tmp.reshape(bsz, -1, 10).transpose(1,2)
+        else:
+            x = x.view(bsz, 4, 4).transpose(1,2)
 
         qdev = tq.QuantumDevice(n_wires=self.n_wires, bsz=bsz, device=x.device)
 
         # encode input image with '4x4_ryzxy' gates
-        for j in range(self.n_wires):
-            self.uploading[j](qdev, x[:, j])
+        # for j in range(self.n_wires):
+        #     self.uploading[j](qdev, x[:, j])
 
         for r in range(self.design['repeat']):
+            for u in range(self.n_wires):
+                self.uploading[u](qdev, x[:, u])
             for layer in range(self.design['n_layers']):
                 for j in range(self.n_wires):
                     if self.design['rot' + str(r) + str(layer) + str(j)] != 'N/A':
