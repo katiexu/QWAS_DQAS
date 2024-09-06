@@ -40,13 +40,7 @@ resize_modes = {
     "nearest": InterpolationMode.NEAREST,
 }
 
-# 自定义二值化转换
-class Binarize(object):
-    def __init__(self, threshold=10):
-        self.threshold = threshold
 
-    def __call__(self, img):
-        return img.point(lambda p: 255 if p > self.threshold else 0)
 class MNISTDataset:
     def __init__(
         self,
@@ -111,10 +105,7 @@ class MNISTDataset:
         return indices
 
     def load(self):
-        tran = [
-            Binarize(threshold=10), # 二值化
-            transforms.ToTensor()
-                ]
+        tran = [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
         if not self.center_crop == 28:
             tran.append(transforms.CenterCrop(self.center_crop))
         if not self.resize == 28:
