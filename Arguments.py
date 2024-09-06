@@ -1,6 +1,6 @@
 class Arguments:
     p = 20
-    n_repeat = 4
+    n_repeat = 2
     n_qubits = 4
     # n_qubits = 10   # MNIST-10
     op_pool_d = ['rx', 'ry', 'rz', 'u3']

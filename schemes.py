@@ -1,18 +1,12 @@
 import copy
 import sys
 import traceback
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import time
-from sklearn.metrics import accuracy_score, f1_score
-from datasets import MNISTDataLoaders, MOSIDataLoaders
 from FusionModel import QNet
 
 from Arguments import Arguments
-import random
-from tqdm import tqdm
 
 class display():
     RED = '\033[31m'
@@ -35,7 +29,7 @@ def get_param_num(model):
 
 def train(model, data_loader, optimizer, criterion, args):
     model.train()
-    for feed_dict in tqdm(data_loader,leave=False,desc='\ttrain'):
+    for feed_dict in data_loader:
         images = feed_dict['image'].to(args.device)
         targets = feed_dict['digit'].to(args.device)
         optimizer.zero_grad()
@@ -51,7 +45,7 @@ def test(model, data_loader, criterion, args):
     target_all = torch.Tensor()
     output_all = torch.Tensor()
     with torch.no_grad():
-        for feed_dict in tqdm(data_loader,leave=False,desc='\ttest'):
+        for feed_dict in data_loader:
             images = feed_dict['image'].to(args.device)
             targets = feed_dict['digit'].to(args.device)
             output = model(images)
@@ -186,6 +180,8 @@ def dqas_Scheme(design, dataloader, epochs=None, verbs=None, save=None):
                   + display.YELLOW + f'{test_acc:12.6f}\t'
                   + f'{best_test_acc:15.6f}\t'
                   + display.RESET,flush=True)
+            if save:
+                torch.save(best_model.state_dict(), 'best_model.pth')
         else:
             print(f'\t{epoch:5d}\t'
                   + f'{train_loss[0]:12.6f}\t'
@@ -203,8 +199,6 @@ def dqas_Scheme(design, dataloader, epochs=None, verbs=None, save=None):
                         grads[0] = grads[0] * 3
                     model_grads.append(grads)
 
-    if save:
-        torch.save(best_model.state_dict(), 'weights/init_weight')
     return val_loss[0], model_grads, best_test_acc
 
 

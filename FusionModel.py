@@ -1,12 +1,9 @@
-import copy
+
 # import pennylane as qml
 import torch
 import torch.nn as nn
 import torchquantum as tq
-import torchquantum.functional as tqf
-from math import pi
 import torch.nn.functional as F
-from torchquantum.encoding import encoder_op_list_name_dict
 import numpy as np
 from Arguments import Arguments
 
@@ -17,11 +14,12 @@ args = Arguments()
 def gen_arch(change_code, base_code):  # start from 1, not 0
     # arch_code = base_code[1:] * base_code[0]
     n_qubits = base_code[0]
-    if n_qubits == 7:
-        arch_code = [2, 3, 4, 5, 6, 7, 1] * base_code[1]  # qubits * layers
-    else:
-        arch_code = [2, 3, 4, 1] * base_code[1]
-        # arch_code = [2, 3, 4, 5, 6, 7, 8, 9, 10, 1] * base_code[1]   # for MNIST 10
+    # if n_qubits == 7:
+    #     arch_code = [2, 3, 4, 5, 6, 7, 1] * base_code[1]  # qubits * layers
+    # else:
+    #     arch_code = [2, 3, 4, 1] * base_code[1]
+    #     # arch_code = [2, 3, 4, 5, 6, 7, 8, 9, 10, 1] * base_code[1]   # for MNIST 10
+    arch_code = (list(range(2,n_qubits+1))+[1])*base_code[1]
     if change_code != None:
         if type(change_code[0]) != type([]):
             change_code = [change_code]

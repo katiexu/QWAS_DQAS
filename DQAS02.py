@@ -1,5 +1,8 @@
 import os.path
+import pickle
 
+from FusionModel import dqas_translator
+from schemes import dqas_Scheme
 from utils import *
 from datasets import MNISTDataLoaders
 
