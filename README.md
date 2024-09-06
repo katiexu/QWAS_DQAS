@@ -23,11 +23,19 @@ Run DQAS04.py: Re-train the current best model found in previous phases.
 ### pip install -r requirement.txt
 
 python==3.7
+
 torch==1.13.1
+
 tensorflow==2.1.0
+
 scipy==1.7.3
+
 qiskit==0.43.3
+
 torchpack==0.3.1
+
 matplotlib==3.5.3
+
 pathos==0.2.5
+
 protobuf==3.8.0
