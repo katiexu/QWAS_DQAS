@@ -92,3 +92,27 @@ def MNISTDataLoaders(args):
             pin_memory=True)
 
     return dataflow['train'], dataflow['valid'], dataflow['test']
+
+
+class NTangledDataset(Dataset):
+    def __init__(self, data, target):
+        self.data = data
+        self.target = target
+    def __len__(self):
+        return len(self.target)
+    def __getitem__(self, index):
+        data = self.data[index]
+        target = self.target[index]
+        return data, target
+
+def NTangledDataLoaders(args=None):
+    X_train = torch.load('data/NTangled/X_train.pt').to(dtype=torch.complex64)
+    y_train = torch.load('data/NTangled/y_train.pt').to(dtype=torch.float)
+    X_test = torch.load('data/NTangled/X_test.pt').to(dtype=torch.complex64)
+    y_test = torch.load('data/NTangled/y_test.pt').to(dtype=torch.float)
+
+    train = NTangledDataset(X_train, y_train)
+    test = NTangledDataset(X_test, y_test)
+    train_loader = torch.utils.data.DataLoader(dataset=train, batch_size=len(train), shuffle=True, pin_memory=True)
+    test_loader = torch.utils.data.DataLoader(dataset=test, batch_size=len(test), shuffle=False, pin_memory=True)
+    return train_loader, test_loader, test_loader

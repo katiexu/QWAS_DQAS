@@ -19,7 +19,7 @@ def gen_arch(change_code, base_code):  # start from 1, not 0
     # else:
     #     arch_code = [2, 3, 4, 1] * base_code[1]
     #     # arch_code = [2, 3, 4, 5, 6, 7, 8, 9, 10, 1] * base_code[1]   # for MNIST 10
-    arch_code = (list(range(2,n_qubits+1))+[1])*base_code[1]
+    arch_code = (list(range(2, n_qubits + 1)) + [1]) * base_code[1]
     if change_code != None:
         if type(change_code[0]) != type([]):
             change_code = [change_code]
@@ -252,25 +252,31 @@ class TQLayer(tq.QuantumModule):
         return input
 
     def forward(self, x):
-        bsz = x.shape[0]
-        kernel_size = args.kernel
-        x = F.avg_pool2d(x, kernel_size)  # 'down_sample_kernel_size' = 6
-        if kernel_size == 4:
-            x = x.view(bsz, 6, 6)
-            tmp = torch.cat((x.view(bsz, -1), torch.zeros(bsz, 4)), dim=-1)
-            x = tmp.reshape(bsz, -1, 10).transpose(1,2)
-        else:
-            x = x.view(bsz, 4, 4).transpose(1,2)
-
-        qdev = tq.QuantumDevice(n_wires=self.n_wires, bsz=bsz, device=x.device)
+        if args.task == ('MNIST-4' or 'Fashion-4' or 'MNIST-10' or 'Fashion-10'):
+            bsz = x.shape[0]
+            kernel_size = args.kernel
+            x = F.avg_pool2d(x, kernel_size)  # 'down_sample_kernel_size' = 6
+            if kernel_size == 4:
+                x = x.view(bsz, 6, 6)
+                tmp = torch.cat((x.view(bsz, -1), torch.zeros(bsz, 4)), dim=-1)
+                x = tmp.reshape(bsz, -1, 10).transpose(1,2)
+            else:
+                x = x.view(bsz, 4, 4).transpose(1,2)
+            qdev = tq.QuantumDevice(n_wires=self.n_wires, bsz=bsz, device=x.device)
+        elif args.task == ('Ansatz Depth Classification' or 'Entangled State Classification'):
+            bsz = x.shape[0]
+            qdev = tq.QuantumDevice(n_wires=args.n_qubits * args.m)
+            qdev.reset_states(bsz=bsz)
+            qdev.set_states(x)
 
         # encode input image with '4x4_ryzxy' gates
         # for j in range(self.n_wires):
         #     self.uploading[j](qdev, x[:, j])
 
         for r in range(self.design['repeat']):
-            for u in range(self.n_wires):
-                self.uploading[u](qdev, x[:, u])
+            if args.task == ('MNIST-4' or 'Fashion-4' or 'MNIST-10' or 'Fashion-10'):
+                for u in range(self.n_wires):
+                    self.uploading[u](qdev, x[:, u])
             for layer in range(self.design['n_layers']):
                 for j in range(self.n_wires):
                     if self.design['rot' + str(r) + str(layer) + str(j)] != 'N/A':
@@ -305,3 +311,24 @@ class QNet(nn.Module):
         exp_val = self.QuantumLayer(x_image)
         output = F.log_softmax(exp_val, dim=1)
         return output
+
+class Classifier(nn.Module):
+    def __init__(self):
+        super(Classifier, self).__init__()
+        self.fc = nn.Linear(args.n_qubits * args.m, 1)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        x = self.fc(x)
+        x = self.sigmoid(x)
+        return x
+
+class HybridNet(nn.Module):
+    def __init__(self, args, design):
+        super(HybridNet, self).__init__()
+        self.qcircuit = QNet(args, design)
+        self.classifier = Classifier()
+
+    def forward(self, x):
+        quantum_out = self.qcircuit(x)
+        return self.classifier(quantum_out)

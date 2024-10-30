@@ -1,14 +1,16 @@
 import pickle
-
 from FusionModel import dqas_translator
 from schemes import dqas_Scheme
 from utils import *
-from datasets import MNISTDataLoaders
+from datasets import MNISTDataLoaders, NTangledDataLoaders
+
+from Arguments import Arguments
+args = Arguments()
 
 
 def load_state():
-    nnp_initial_value = np.random.normal(loc=0.23, scale=0.06, size=[Arguments.n_layers, len(Arguments.op_pool), 3])
-    stp_initial_value = np.zeros([Arguments.p, len(Arguments.op_pool)])
+    nnp_initial_value = np.random.normal(loc=0.23, scale=0.06, size=[args.n_layers, len(args.op_pool), 3])
+    stp_initial_value = np.zeros([args.p, len(args.op_pool)])
 
     history = []
     if os.path.isfile('phase1.history'):
@@ -68,31 +70,36 @@ def update_nnp(nnp, deri_nnp):
 def generate_edges():
     edges_input = []
     for i in range(4):
-        edges_input.append(random.sample(range(Arguments.n_qubits), 2))
+        edges_input.append(random.sample(range(args.n_qubits), 2))
     print('\tedges:', edges_input)
     edges_input = np.array(
-        [[edges_input.copy() for l in range(Arguments.p)] for r in range(Arguments.n_repeat)])
+        [[edges_input.copy() for l in range(args.p)] for r in range(args.n_repeat)])
     return edges_input
 
 
 def DQAS_search(stp, nnp, scheme_epochs):
     prob = tf.math.exp(stp) / tf.tile(tf.math.reduce_sum(tf.math.exp(stp), axis=1)[:, tf.newaxis],
-                                      [1, len(Arguments.op_pool)])  # softmax categorical probability
+                                      [1, len(args.op_pool)])  # softmax categorical probability
     preset = preset_byprob(prob)
     print('chosen_ops: ', get_chosen_ops(preset))
     deri_stp, deri_nnp, costl, test_acc_list, edges, ops_list = [], [], [], [], [], []
-    dataloader = MNISTDataLoaders(Arguments())
-    enable = np.ones((Arguments.n_repeat, Arguments.p, Arguments.n_qubits), dtype=np.bool_)
+    if args.task == ('MNIST-4' or 'Fashion-4' or 'MNIST-10' or 'Fashion-10'):
+        dataloader = MNISTDataLoaders(args)
+    elif args.task == ('Ansatz Depth Classification' or 'Entangled State Classification'):
+        dataloader = NTangledDataLoaders(args)
+    else:
+        pass
+    enable = np.ones((args.n_repeat, args.p, args.n_qubits), dtype=np.bool_)
     for _ in range(8):
         edges_input = generate_edges()
 
-        loss, gnnp, test_acc, chosen_ops = qaoa_block_vag(edges_input, nnp, preset, Arguments.n_repeat, enable,
+        loss, gnnp, test_acc, chosen_ops = qaoa_block_vag(edges_input, nnp, preset, args.n_repeat, enable,
                                                           dataloader, scheme_epochs)
 
         gs = tf.tensor_scatter_nd_add(
             tf.cast(-prob, dtype=tf.float32),
-            tf.constant(list(zip(range(Arguments.p), preset))),
-            tf.ones([Arguments.p], dtype=tf.float32),
+            tf.constant(list(zip(range(args.p), preset))),
+            tf.ones([args.p], dtype=tf.float32),
         )
         deri_stp.append(
             (tf.cast(loss, dtype=tf.float32) - tf.cast(0, dtype=tf.float32)) * tf.cast(gs, dtype=tf.float32))
@@ -107,7 +114,7 @@ def DQAS_search(stp, nnp, scheme_epochs):
     newstp = update_stp(stp, deri_stp)
 
     # cand_preset = get_preset(stp).numpy()
-    # cand_preset_repr = [repr_op(Arguments.op_pool[f]) for f in cand_preset]
+    # cand_preset_repr = [repr_op(args.op_pool[f]) for f in cand_preset]
     # print("best candidates so far:", cand_preset_repr)
 
     max_idx = np.argmax(test_acc_list)
@@ -115,7 +122,7 @@ def DQAS_search(stp, nnp, scheme_epochs):
     return newstp, newnnp, costl[max_idx], test_acc_list[max_idx], edges[max_idx], ops_list[max_idx]
 
 
-def main(epochs=200, threshold=20, scheme_epochs=5):
+def main(epochs=200, threshold=20, scheme_epochs=50):
     set_seed(42)
 
     stp, nnp, history = load_state()
@@ -146,7 +153,7 @@ def main(epochs=200, threshold=20, scheme_epochs=5):
             print('epoch, loss, test_acc, edges, chosen_ops', file=f)
             for epoch in range(len(history)):
                 stp, nnp, cost, acc, edges, chosen_ops = history[epoch]
-                print(epoch, cost, acc, f'"{edges[0][0].tolist()}"',f'"{chosen_ops[:Arguments.p]}"' ,sep=',', file=f)
+                print(epoch, cost, acc, f'"{edges[0][0].tolist()}"',f'"{chosen_ops[:args.p]}"' ,sep=',', file=f)
 
         epochs = np.arange(len(history))
         data = np.array([r[2] for r in history])

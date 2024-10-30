@@ -4,9 +4,12 @@ import traceback
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from FusionModel import QNet
+from FusionModel import QNet, HybridNet
+from sklearn.metrics import accuracy_score
 
 from Arguments import Arguments
+args = Arguments()
+
 
 class display():
     RED = '\033[31m'
@@ -38,6 +41,16 @@ def train(model, data_loader, optimizer, criterion, args):
         loss.backward()
         optimizer.step()
 
+def train_NTangled(model, data_loader, optimizer, criterion, args):
+    model.train()
+    for datas, targets in data_loader:
+        images = datas.to(args.device)
+        targets = targets.to(args.device)
+        optimizer.zero_grad()
+        output = model(images)
+        loss = criterion(output, targets)
+        loss.backward()
+        optimizer.step()
 
 def test(model, data_loader, criterion, args):
     model.eval()
@@ -62,6 +75,23 @@ def test(model, data_loader, criterion, args):
 
     return total_loss, accuracy
 
+def test_NTangled(model, data_loader, criterion, args):
+    model.eval()
+    total_loss = 0
+    target_all = torch.Tensor()
+    output_all = torch.Tensor()
+    with torch.no_grad():
+        for datas,targets in data_loader:
+            images = datas.to(args.device)
+            targets = targets.to(args.device)
+            output = model(images)
+            instant_loss = criterion(output, targets).item()
+            total_loss += instant_loss
+            target_all = torch.cat((target_all, targets), dim=0)
+            output_all = torch.cat((output_all, output), dim=0)
+    total_loss /= len(data_loader)
+
+    return total_loss
 
 def evaluate(model, data_loader, args):
     model.eval()
@@ -81,6 +111,18 @@ def evaluate(model, data_loader, args):
     metrics = accuracy
     return metrics
 
+def evaluate_NTangled(model, data_loader, args):
+    model.eval()
+    metrics = {}
+
+    with torch.no_grad():
+        for datas, targets in data_loader:
+            images = datas.to(args.device)
+            targets = targets.to(args.device)
+            output = model(images)
+            pred = (output >= 0.5).float()
+            accuracy = accuracy_score(targets, pred)
+            return accuracy
 
 # def Scheme(design, task, weight='base', epochs=None, verbs=None, save=None):
 #     random.seed(42)
@@ -142,64 +184,122 @@ def evaluate(model, data_loader, args):
 
 
 def dqas_Scheme(design, dataloader, epochs=None, verbs=None, save=None):
-    args = Arguments()
-
     train_loader, val_loader, test_loader = dataloader
-    model = QNet(args, design).to(args.device)
-    criterion = nn.NLLLoss()
+    if args.task == ('MNIST-4' or 'Fashion-4' or 'MNIST-10' or 'Fashion-10'):
+        model = QNet(args, design).to(args.device)
+        criterion = nn.NLLLoss()
+        optimizer = optim.Adam(model.QuantumLayer.parameters(), lr=args.qlr)
 
-    optimizer = optim.Adam(model.QuantumLayer.parameters(), lr=args.qlr)
-    train_loss_list, val_acc_list = [], []
-    best_test_acc = 0
-    model_grads = None
-    print(
-        f'\t{"epoch":>5s}\t{"train_loss":>12s}\t{"train_acc":>12s}\t{"val_acc":>12s}\t{"test_acc":>12s}\t{"best_test_acc":>15s}',flush=True)
-    for epoch in range(epochs):
-        sys.stdout.flush()
-        try:
-            train(model, train_loader, optimizer, criterion, args)
-        except Exception as e:
-            traceback.print_exc()
+        train_loss_list, val_acc_list = [], []
+        best_test_acc = 0
+        model_grads = None
+        print(
+            f'\t{"epoch":>5s}\t{"train_loss":>12s}\t{"train_acc":>12s}\t{"val_acc":>12s}\t{"test_acc":>12s}\t{"best_test_acc":>15s}',flush=True)
+        for epoch in range(epochs):
+            sys.stdout.flush()
+            try:
+                train(model, train_loader, optimizer, criterion, args)
+            except Exception as e:
+                traceback.print_exc()
 
-        train_loss = test(model, train_loader, criterion, args)
-        train_loss_list.append(train_loss)
-        val_loss = test(model, val_loader, criterion, args)
-        val_acc = evaluate(model, val_loader, args)
+            train_loss = test(model, train_loader, criterion, args)
+            train_loss_list.append(train_loss)
+            val_loss = test(model, val_loader, criterion, args)
+            val_acc = evaluate(model, val_loader, args)
 
-        val_acc_list.append(val_acc)
-        test_acc = evaluate(model, test_loader, args)
+            val_acc_list.append(val_acc)
+            test_acc = evaluate(model, test_loader, args)
 
-        sys.stdout.flush()
-        if test_acc > best_test_acc:
-            best_test_acc = test_acc
-            best_model = copy.deepcopy(model)
-            print(f'\t{epoch:5d}\t'
-                  + f'{train_loss[0]:12.6f}\t'
-                  + f'{train_loss[1]:12.6f}\t'
-                  + f'{val_acc_list[-1]:12.6f}\t'
-                  + display.YELLOW + f'{test_acc:12.6f}\t'
-                  + f'{best_test_acc:15.6f}\t'
-                  + display.RESET,flush=True)
-            if save:
-                torch.save(best_model.state_dict(), 'best_model.pth')
-        else:
-            print(f'\t{epoch:5d}\t'
-                  + f'{train_loss[0]:12.6f}\t'
-                  + f'{train_loss[1]:12.6f}\t'
-                  + f'{val_acc_list[-1]:12.6f}\t'
-                  + f'{test_acc:12.6f}\t'
-                  + f'{best_test_acc:15.6f}\t',flush=True)
+            sys.stdout.flush()
+            if test_acc > best_test_acc:
+                best_test_acc = test_acc
+                best_model = copy.deepcopy(model)
+                print(f'\t{epoch:5d}\t'
+                      + f'{train_loss[0]:12.6f}\t'
+                      + f'{train_loss[1]:12.6f}\t'
+                      + f'{val_acc_list[-1]:12.6f}\t'
+                      + display.YELLOW + f'{test_acc:12.6f}\t'
+                      + f'{best_test_acc:15.6f}\t'
+                      + display.RESET,flush=True)
+                if save:
+                    torch.save(best_model.state_dict(), 'best_model.pth')
+            else:
+                print(f'\t{epoch:5d}\t'
+                      + f'{train_loss[0]:12.6f}\t'
+                      + f'{train_loss[1]:12.6f}\t'
+                      + f'{val_acc_list[-1]:12.6f}\t'
+                      + f'{test_acc:12.6f}\t'
+                      + f'{best_test_acc:15.6f}\t',flush=True)
 
-        if model_grads is None:
-            model_grads = []
-            for param in model.parameters():
-                if param.grad is not None:
-                    grads = param.grad.tolist()
-                    if len(grads[0]) == 1:
-                        grads[0] = grads[0] * 3
-                    model_grads.append(grads)
+            if model_grads is None:
+                model_grads = []
+                for param in model.parameters():
+                    if param.grad is not None:
+                        grads = param.grad.tolist()
+                        if len(grads[0]) == 1:
+                            grads[0] = grads[0] * 3
+                        model_grads.append(grads)
 
-    return val_loss[0], model_grads, best_test_acc
+        return val_loss[0], model_grads, best_test_acc
+
+    else:
+        model = HybridNet(args, design).to(args.device)
+        criterion = nn.BCELoss()
+
+        optimizer = optim.Adam(model.qcircuit.QuantumLayer.parameters(), lr=args.qlr)
+        train_loss_list, val_acc_list = [], []
+        best_test_acc = 0
+        model_grads = None
+        print(
+            f'\t{"epoch":>5s}\t{"train_loss":>12s}\t{"train_acc":>12s}\t{"val_acc":>12s}\t{"test_acc":>12s}\t{"best_test_acc":>15s}',
+            flush=True)
+        for epoch in range(epochs):
+            sys.stdout.flush()
+            try:
+                train_NTangled(model, train_loader, optimizer, criterion, args)
+            except Exception as e:
+                traceback.print_exc()
+
+            train_loss = test_NTangled(model, train_loader, criterion, args)
+            train_acc = evaluate_NTangled(model, train_loader, args)
+            train_loss_list.append(train_loss)
+            val_loss = test_NTangled(model, val_loader, criterion, args)
+            val_acc = evaluate_NTangled(model, val_loader, args)
+
+            val_acc_list.append(val_acc)
+            test_acc = evaluate_NTangled(model, test_loader, args)
+
+            sys.stdout.flush()
+            if test_acc > best_test_acc:
+                best_test_acc = test_acc
+                best_model = copy.deepcopy(model)
+                print(f'\t{epoch:5d}\t'
+                      + f'{train_loss:12.6f}\t'
+                      + f'{train_acc:12.6f}\t'
+                      + f'{val_acc:12.6f}\t'
+                      + display.YELLOW + f'{test_acc:12.6f}\t'
+                      + f'{best_test_acc:15.6f}\t'
+                      + display.RESET, flush=True)
+                if save:
+                    torch.save(best_model.state_dict(), 'best_model.pth')
+            else:
+                print(f'\t{epoch:5d}\t'
+                      + f'{train_loss:12.6f}\t'
+                      + f'{train_acc:12.6f}\t'
+                      + f'{val_acc:12.6f}\t'
+                      + f'{test_acc:12.6f}\t'
+                      + f'{best_test_acc:15.6f}\t', flush=True)
+
+            if model_grads is None:
+                model_grads = []
+                for param in model.qcircuit.QuantumLayer.parameters():
+                    if param.grad is not None:
+                        grads = param.grad.tolist()
+                        if len(grads[0]) == 1:
+                            grads[0] = grads[0] * 3
+                        model_grads.append(grads)
+
+        return val_loss, model_grads, best_test_acc
 
 
 if __name__ == '__main__':
